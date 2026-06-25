@@ -1,0 +1,90 @@
+services:
+  # ---------- Reverse proxy (Step 4) ----------
+  proxy:
+    image: traefik:v3
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # ---------- Backend (Step 1) ----------
+  backend:
+    build:
+      context: .
+      target: dev
+    environment:
+      MYSQL_HOST: db
+      MYSQL_USER: todo
+      MYSQL_PASSWORD: todopassword
+      MYSQL_DB: todos
+    depends_on:
+      db:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.backend.rule=PathPrefix(`/api`)"
+      - "traefik.http.routers.backend.entrypoints=web"
+      - "traefik.http.services.backend.loadbalancer.server.port=3000"
+    develop:
+      watch:
+        - action: sync
+          path: ./backend/src
+          target: /app/src
+        - action: rebuild
+          path: ./backend/package.json
+
+  # ---------- Database (Steps 1 & 2) ----------
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: todos
+      MYSQL_USER: todo
+      MYSQL_PASSWORD: todopassword
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpassword"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------- Frontend (Step 3) ----------
+  frontend:
+    build:
+      context: ./client
+    depends_on:
+      - backend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.frontend.entrypoints=web"
+      - "traefik.http.routers.frontend.priority=1"
+      - "traefik.http.services.frontend.loadbalancer.server.port=5173"
+    develop:
+      watch:
+        - action: sync
+          path: ./client/src
+          target: /app/src
+        - action: rebuild
+          path: ./client/package.json
+
+  # ---------- Database UI (Step 5) ----------
+  phpmyadmin:
+    image: phpmyadmin:5
+    environment:
+      PMA_HOST: db
+    depends_on:
+      - db
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.phpmyadmin.rule=Host(`db.localhost`)"
+      - "traefik.http.routers.phpmyadmin.entrypoints=web"
+      - "traefik.http.services.phpmyadmin.loadbalancer.server.port=80"
+
+volumes:
+  db-data:
